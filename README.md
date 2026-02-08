@@ -84,7 +84,7 @@ polytoria-avatar-toolkit/
 ├── script.js           # Core functionality
 ├── character.glb       # Default character model
 ├── smile.png           # Default face decal
-├── preview.png           # Preview for README
+├── preview.png         # Preview for README
 └── README.md           # Documentation
 ```
 
