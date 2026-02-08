@@ -32,7 +32,7 @@ A powerful web-based tool for creating, customizing, and previewing Polytoria av
 ## 🚀 Getting Started
 
 ### Online Version
-Visit the live demo: 
+Visit the live demo: https://catchat0.github.io/PolytoriaAvatarToolkit/
 
 ### Local Setup
 1. Clone this repository:
