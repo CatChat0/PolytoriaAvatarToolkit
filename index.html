@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polytoria Avatar Previewer</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/exporters/GLTFExporter.js"></script>
+</head>
+<body>
+    <div id="controls-panel">
+        <div class="panel-header">
+            <h1>Polytoria Avatar Toolkit</h1>
+        </div>
+
+        <section class="section">
+            <h2>Template Converter</h2>
+            <div class="radio-group">
+                <label class="radio-option">
+                    <input type="radio" name="convertMode" value="rbx2poly" checked>
+                    <span>RBX → Poly</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="convertMode" value="poly2rbx">
+                    <span>Poly → RBX</span>
+                </label>
+            </div>
+            <input type="file" id="converterInput" accept="image/*" class="file-input">
+            <button id="convertBtn" class="btn btn-primary">Convert & Download</button>
+        </section>
+
+        <section class="section">
+            <h2>Appearance</h2>
+            <div class="input-group">
+                <label>Background</label>
+                <input type="color" id="bgColor" value="#0a0a0a">
+            </div>
+            <div class="input-group">
+                <label>Skin Tone</label>
+                <input type="color" id="skinTone" value="#cccccc">
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>Display</h2>
+            <label class="checkbox-option">
+                <input type="checkbox" id="showGrid" checked>
+                <span>Show Grid</span>
+            </label>
+        </section>
+
+        <section class="section">
+            <h2>Clothing</h2>
+            <div class="input-group">
+                <label>Type</label>
+                <select id="clothingType">
+                    <option value="shirt">Shirt/T-Shirt</option>
+                    <option value="pants">Pants</option>
+                    <option value="face">Face Decal</option>
+                </select>
+                <label class="checkbox-option">
+                    <input type="checkbox" id="keepTextures" checked>
+                    <span>Layer Textures (Don't Clear)</span>
+                </label>
+            </div>
+            <input type="file" id="upload" accept="image/*" class="file-input">
+            <button id="clearBtn" class="btn btn-secondary">Clear Textures</button>
+        </section>
+
+        <section class="section">
+            <h2>UGC Accessories</h2>
+            <div class="input-group">
+                <label>Import accessory (.glb)</label>
+                <input type="file" id="ugcUpload" accept=".glb" class="file-input">
+                <p class="status-text" id="ugcStatus"></p>
+            </div>
+            <div id="ugcList"></div>
+            <button id="clearUgcBtn" class="btn btn-secondary" style="margin-top: 10px;">Clear All Accessories</button>
+            <button id="downloadBtn" class="btn btn-primary" onclick="downloadGeometry()">Download Character</button>
+            <button id="downloadBtn" class="btn btn-secondary" onclick="downloadTexturesZip()">Download Textures</button>
+        </section>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <div class="watermark">
+        Made by <a href="https://github.com/CatChat0" target="_blank">CatChat</a>, consider donating me on <a href="https://polytoria.com/u/C4TCH4T" target="_blank">Polytoria</a>. <3
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
