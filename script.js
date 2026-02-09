@@ -188,9 +188,27 @@ function updateStatus(message, type = 'info') {
 function loadModelFromPath(path) {
     updateStatus('Loading model...', 'loading');
     
+    // Store UGC accessories before removing old model
+    const savedUgc = [];
+    if (polyModel) {
+        equippedUgc.forEach(ugc => {
+            if (ugc && ugc.parent) {
+                // Save UGC data including position, rotation, scale
+                savedUgc.push({
+                    object: ugc.clone(), // Clone the UGC object
+                    parentName: ugc.parent.name,
+                    position: ugc.position.clone(),
+                    rotation: ugc.rotation.clone(),
+                    scale: ugc.scale.clone(),
+                    fileName: ugc.userData.fileName
+                });
+            }
+        });
+        scene.remove(polyModel);
+    }
+    
     const loader = new THREE.GLTFLoader();
     loader.load(path, (gltf) => {
-        if (polyModel) scene.remove(polyModel);
         polyModel = gltf.scene;
 
         const box = new THREE.Box3().setFromObject(polyModel);
@@ -211,6 +229,39 @@ function loadModelFromPath(path) {
         });
         
         scene.add(polyModel);
+        
+        // Re-attach saved UGC accessories to new model
+        equippedUgc = []; // Clear the old array
+        savedUgc.forEach(ugcData => {
+            let attached = false;
+            polyModel.traverse(child => {
+                if (!attached && child.name === ugcData.parentName) {
+                    ugcData.object.position.copy(ugcData.position);
+                    ugcData.object.rotation.copy(ugcData.rotation);
+                    ugcData.object.scale.copy(ugcData.scale);
+                    ugcData.object.userData.fileName = ugcData.fileName;
+                    child.add(ugcData.object);
+                    equippedUgc.push(ugcData.object);
+                    attached = true;
+                }
+            });
+        });
+        
+        // Reapply all active textures
+        if (faceTexture) {
+            applyFaceTexture();
+        }
+        
+        // Reapply shirt, pants, and face textures
+        for (const category in activeTextures) {
+            if (activeTextures[category]) {
+                applyTextureToCategory(category, activeTextures[category]);
+            }
+        }
+        
+        // Update the UGC list UI
+        updateUgcList();
+        
         updateStatus('Model loaded', 'success');
     }, undefined, (error) => {
         updateStatus('Failed to auto-load', 'error');
@@ -238,6 +289,23 @@ function applyFaceTexture() {
             const meshName = child.name.toLowerCase();
             if (meshName.includes('head') || meshName.includes('face')) {
                 child.material = createMaterial(currentSkinTone, faceTexture);
+                child.material.needsUpdate = true;
+            }
+        }
+    });
+}
+
+function applyTextureToCategory(category, texture) {
+    if (!polyModel || !texture) return;
+    
+    const bodyParts = BODY_PARTS[category];
+    if (!bodyParts) return;
+    
+    polyModel.traverse(child => {
+        if (child.isMesh && !child.userData.isUGC) {
+            const meshName = child.name.toLowerCase();
+            if (bodyParts.some(part => meshName.includes(part))) {
+                child.material = createMaterial(currentSkinTone, texture);
                 child.material.needsUpdate = true;
             }
         }
@@ -636,12 +704,33 @@ if (convertBtn) {
         const srcMap = isRbx2Poly ? rbxMapData : polyMapData;
         const destMap = isRbx2Poly ? polyMapData : rbxMapData;
         
+        updateStatus('Converting...', 'loading');
+        
         try {
-            const imgBitmap = await createImageBitmap(file);
+            const img = new Image();
+            const reader = new FileReader();
+            
+            await new Promise((resolve, reject) => {
+                reader.onload = (e) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+            
             const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d', { 
+                willReadFrequently: true,
+                alpha: true 
+            });
+            
             canvas.width = isRbx2Poly ? 1024 : 585;
             canvas.height = isRbx2Poly ? 1024 : 559;
+            
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
             
             ['top_parts', 'bottom_parts'].forEach(category => {
                 srcMap[category].forEach((srcNode, index) => {
@@ -649,23 +738,36 @@ if (convertBtn) {
                     if (!destNode) return;
                     const [sx, sy, sw, sh] = srcNode.rect;
                     const [dx, dy, dw, dh] = destNode.rect;
-                    ctx.drawImage(imgBitmap, sx, sy, sw, sh, dx, dy, dw, dh);
+                    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
                 });
             });
             
             canvas.toBlob((blob) => {
+                if (!blob) {
+                    updateStatus('Conversion failed', 'error');
+                    return;
+                }
+                
                 const url = URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.download = isRbx2Poly ? 'polytoria_template.png' : 'roblox_template.png';
                 link.href = url;
+                
+                document.body.appendChild(link);
                 link.click();
-                URL.revokeObjectURL(url);
+                document.body.removeChild(link);
+                
+                setTimeout(() => URL.revokeObjectURL(url), 100);
+                
+                updateStatus('Conversion complete!', 'success');
+                
                 if (document.getElementById('clothingType')?.value === 'shirt' && polyModel) {
                     applyCanvasAsTexture(canvas);
                 }
-            }, 'image/png');
+            }, 'image/png', 1.0);
         } catch (err) { 
-            console.error('Conversion error:', err); 
+            console.error('Conversion error:', err);
+            updateStatus('Conversion failed - try a different image', 'error');
         }
     });
 }
@@ -683,11 +785,152 @@ if (addUgcBtn) {
 }
 
 window.addEventListener('load', () => {
-    loadModelFromPath('character.glb');
-    setTimeout(() => loadFaceDecal('smile.png'), 1000);
     const bg = document.getElementById('bgColor');
     if (bg) renderer.setClearColor(bg.value);
+    
+    loadModelFromPath('character.glb');
+    setTimeout(() => loadFaceDecal('Smile.png'), 1000);
+    
+    const mobileToggle = document.getElementById('mobile-toggle');
+    const controlsPanel = document.getElementById('controls-panel');
+    
+    if (mobileToggle && controlsPanel) {
+        let startY = 0;
+        let currentY = 0;
+        let isDragging = false;
+        
+        mobileToggle.addEventListener('touchstart', (e) => {
+            startY = e.touches[0].clientY;
+            isDragging = true;
+        }, { passive: true });
+        
+        mobileToggle.addEventListener('touchmove', (e) => {
+            if (!isDragging) return;
+            currentY = e.touches[0].clientY;
+            const deltaY = currentY - startY;
+            
+            if (Math.abs(deltaY) > 10) {
+                const isOpen = controlsPanel.classList.contains('open');
+                
+                if (deltaY > 50 && isOpen) {
+                    controlsPanel.classList.remove('open');
+                    isDragging = false;
+                } else if (deltaY < -50 && !isOpen) {
+                    controlsPanel.classList.add('open');
+                    isDragging = false;
+                }
+            }
+        }, { passive: true });
+        
+        mobileToggle.addEventListener('touchend', () => {
+            if (isDragging && Math.abs(currentY - startY) < 10) {
+                controlsPanel.classList.toggle('open');
+            }
+            isDragging = false;
+        }, { passive: true });
+        
+        mobileToggle.addEventListener('click', (e) => {
+            if (window.innerWidth > 768) {
+                controlsPanel.classList.toggle('open');
+            }
+        });
+    }
+    
+    setupDropZone('converterDropZone', 'converterInput', ['image/png', 'image/jpeg', 'image/jpg']);
+    setupDropZone('ugcDropZone', 'ugcUpload', ['model/gltf-binary', '.glb']);
+    
+    const genderRadios = document.querySelectorAll('input[name="characterGender"]');
+    genderRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            const modelPath = e.target.value === 'female' ? 'character_female.glb' : 'character.glb';
+            loadModelFromPath(modelPath);
+        });
+    });
 });
+
+function setupDropZone(dropZoneId, inputId, acceptedTypes) {
+    const dropZone = document.getElementById(dropZoneId);
+    const input = document.getElementById(inputId);
+    
+    if (!dropZone || !input) return;
+    
+    const textElement = dropZone.querySelector('.drop-zone-text');
+    const originalText = textElement.textContent;
+    
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+            dropZone.classList.add('drag-over');
+        });
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+            dropZone.classList.remove('drag-over');
+        });
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        
+        if (files.length > 0) {
+            const file = files[0];
+            const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+            const isValid = acceptedTypes.some(type => 
+                file.type === type || fileExtension === type || type.includes(fileExtension)
+            );
+            
+            if (isValid) {
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                input.files = dataTransfer.files;
+                
+                updateDropZoneText(dropZone, textElement, file.name);
+                
+                const event = new Event('change', { bubbles: true });
+                input.dispatchEvent(event);
+            } else {
+                alert('Invalid file type. Please upload the correct format.');
+            }
+        }
+    });
+    
+    dropZone.addEventListener('click', (e) => {
+        if (e.target !== input) {
+            input.click();
+        }
+    });
+    
+    input.addEventListener('change', (e) => {
+        if (input.files.length > 0) {
+            updateDropZoneText(dropZone, textElement, input.files[0].name);
+        } else {
+            resetDropZoneText(dropZone, textElement, originalText);
+        }
+    });
+    
+    function updateDropZoneText(zone, text, fileName) {
+        zone.classList.add('has-file');
+        text.classList.add('file-selected');
+        text.textContent = `✓ ${fileName}`;
+    }
+    
+    function resetDropZoneText(zone, text, original) {
+        zone.classList.remove('has-file');
+        text.classList.remove('file-selected');
+        text.textContent = original;
+    }
+}
+
 
 function animate() {
     requestAnimationFrame(animate);
