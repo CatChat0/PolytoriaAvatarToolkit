@@ -145,6 +145,62 @@ body {
     background: var(--bg-input);
 }
 
+.drop-zone {
+    width: 100%;
+    padding: 30px 20px;
+    background: var(--bg-input);
+    border: 2px dashed var(--border-color);
+    border-radius: 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    margin-bottom: 10px;
+    position: relative;
+}
+
+.drop-zone:hover {
+    border-color: var(--text-secondary);
+    background: #282828;
+}
+
+.drop-zone.drag-over {
+    border-color: var(--accent-primary);
+    background: rgba(255, 255, 255, 0.05);
+    transform: scale(1.02);
+}
+
+.drop-zone.has-file {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.05);
+}
+
+.drop-zone-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    pointer-events: none;
+}
+
+.drop-zone-text.file-selected {
+    color: #10b981;
+    font-weight: 500;
+}
+
+.drop-zone-icon {
+    font-size: 24px;
+    margin-bottom: 8px;
+    opacity: 0.5;
+}
+
+.drop-zone input[type="file"] {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
 input[type="color"] {
     width: 100%;
     height: 40px;
@@ -296,16 +352,71 @@ select:hover {
 
 @media (max-width: 768px) {
     #controls-panel {
+        position: fixed;
+        top: auto;
+        bottom: 0;
+        left: 0;
         width: 100%;
-        height: auto;
-        max-height: 50vh;
-        position: relative;
+        height: 80vh;
+        max-height: 80vh;
+        border-radius: 20px 20px 0 0;
+        transform: translateY(calc(100% - 60px));
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        z-index: 1000;
+        
+        /* The Secret Sauce: One Big Scroll */
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto; /* Enable scroll on the main panel */
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #controls-panel.open {
+        transform: translateY(0);
+    }
+
+    #mobile-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: var(--bg-panel);
+        border-bottom: 1px solid var(--border-color);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: none;
+        
+        /* Keep the handle at the top while scrolling */
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        flex-shrink: 0;
+    }
+
+    #mobile-toggle::before {
+        content: '';
+        width: 40px;
+        height: 4px;
+        background: var(--text-secondary);
+        border-radius: 2px;
+    }
+
+    /* Reset the individual sections so they DON'T scroll themselves */
+    #controls-panel > *:not(#mobile-toggle) {
+        overflow: visible !important;
+        max-height: none !important;
+        flex-shrink: 0;
     }
 
     #canvas-container {
-        left: 0;
-        top: auto;
-        height: 50vh;
+        height: 100vh;
+    }
+}
+
+@media (min-width: 769px) {
+    #mobile-toggle {
+        display: none;
     }
 }
 
@@ -329,4 +440,28 @@ select:hover {
 
 .watermark a:hover {
     color: rgba(255, 255, 255, 0.4);
+}
+
+@media (max-width: 768px) {
+    .watermark {
+        /* Positioning */
+        top: 20px; 
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        
+        /* Layering: Higher than the panel (1000) */
+        z-index: 2000; 
+        
+        /* Size & Appearance */
+        font-size: 15px; 
+        opacity: 0.6;
+        white-space: nowrap;
+        text-align: center;
+    }
+
+    .watermark a {
+        /* Make sure the link is still readable at small sizes */
+        font-weight: 600; 
+    }
 }
