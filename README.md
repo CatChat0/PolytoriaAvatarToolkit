@@ -110,8 +110,8 @@ If you find this tool helpful, consider:
 ## 👨‍💻 Author
 
 **CatChat**
-- GitHub: [@YourGithubUsername](https://github.com/CatChat0)
-- Polytoria: [Your Profile](https://polytoria.com/u/C4TCH4T)
+- GitHub: [@CatChat0](https://github.com/CatChat0)
+- Polytoria: [@C4TCH4T](https://polytoria.com/u/C4TCH4T)
 
 ---
 
