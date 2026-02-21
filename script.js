@@ -1,3 +1,184 @@
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_TRIANGLES = 500000;
+const FILE_LOAD_TIMEOUT = 30000;
+
+// check actual file content, not just the extension
+const FILE_SIGNATURES = {
+    png: '89504e47',
+    jpg: 'ffd8ff',
+    jpeg: 'ffd8ff',
+    glb: '676c5446'
+};
+
+function escapeHtml(unsafe) {
+    if (typeof unsafe !== 'string') return '';
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function sanitizeFilename(filename) {
+    if (typeof filename !== 'string') return 'unnamed';
+    return filename
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .replace(/\.{2,}/g, '.')
+        .substring(0, 255);
+}
+
+async function validateFileSignature(file, expectedTypes) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+            try {
+                const arr = new Uint8Array(e.target.result).subarray(0, 8);
+                let header = '';
+                for (let i = 0; i < arr.length; i++) {
+                    header += arr[i].toString(16).padStart(2, '0');
+                }
+                
+                const isValid = expectedTypes.some(type => 
+                    header.startsWith(FILE_SIGNATURES[type])
+                );
+                
+                resolve(isValid);
+            } catch (error) {
+                reject(error);
+            }
+        };
+        
+        reader.onerror = () => reject(new Error('File read error'));
+        reader.readAsArrayBuffer(file.slice(0, 8));
+    });
+}
+
+async function validateImageFile(file) {
+    if (file.size > MAX_IMAGE_SIZE) {
+        throw new Error(`Image too large! Maximum size is ${MAX_IMAGE_SIZE / 1024 / 1024}MB`);
+    }
+    
+    const ext = file.name.toLowerCase().slice(file.name.lastIndexOf('.')).substring(1);
+    if (!['png', 'jpg', 'jpeg'].includes(ext)) {
+        throw new Error('Invalid file extension. Only PNG and JPEG allowed.');
+    }
+    
+    const isValid = await validateFileSignature(file, ['png', 'jpg', 'jpeg']);
+    if (!isValid) {
+        throw new Error('File content does not match extension. Possible file spoofing detected.');
+    }
+    
+    return true;
+}
+
+async function validateGLBFile(file) {
+    if (file.size > MAX_FILE_SIZE) {
+        throw new Error(`File too large! Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+    }
+    
+    if (!file.name.toLowerCase().endsWith('.glb')) {
+        throw new Error('Invalid file extension. Only .glb files allowed.');
+    }
+    
+    const isValid = await validateFileSignature(file, ['glb']);
+    if (!isValid) {
+        throw new Error('File is not a valid GLB file. Possible file spoofing detected.');
+    }
+    
+    return true;
+}
+
+function validateGLTFModel(gltf) {
+    try {
+        let totalTriangles = 0;
+        
+        gltf.scene.traverse((child) => {
+            if (child.isMesh && child.geometry) {
+                const geometry = child.geometry;
+                
+                if (geometry.index) {
+                    totalTriangles += geometry.index.count / 3;
+                } else if (geometry.attributes.position) {
+                    totalTriangles += geometry.attributes.position.count / 3;
+                }
+                
+                if (child.material) {
+                    const material = child.material;
+                    
+                    if (material.onBeforeCompile && !material.userData.allowedShader) {
+                        console.warn('Model contains custom shader code - blocked for security');
+                        return false;
+                    }
+                }
+            }
+        });
+        
+        if (totalTriangles > MAX_TRIANGLES) {
+            throw new Error(`Model has too many triangles (${Math.floor(totalTriangles).toLocaleString()}). Maximum: ${MAX_TRIANGLES.toLocaleString()}`);
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('Model validation error:', error);
+        throw error;
+    }
+}
+
+async function loadImageSafely(file, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const timeoutId = setTimeout(() => {
+            img.src = '';
+            reject(new Error('Image load timeout'));
+        }, timeout);
+        
+        img.onload = () => {
+            clearTimeout(timeoutId);
+            
+            if (img.width > 8192 || img.height > 8192) {
+                URL.revokeObjectURL(img.src);
+                reject(new Error('Image dimensions too large (max 8192x8192)'));
+                return;
+            }
+            
+            resolve(img);
+        };
+        
+        img.onerror = () => {
+            clearTimeout(timeoutId);
+            URL.revokeObjectURL(img.src);
+            reject(new Error('Failed to load image'));
+        };
+        
+        try {
+            img.src = URL.createObjectURL(file);
+        } catch (e) {
+            clearTimeout(timeoutId);
+            reject(new Error('Failed to create image URL'));
+        }
+    });
+}
+
+function safeCreateObjectURL(blob) {
+    try {
+        return URL.createObjectURL(blob);
+    } catch (e) {
+        console.error('Failed to create object URL:', e);
+        return null;
+    }
+}
+
+function safeRevokeObjectURL(url) {
+    try {
+        if (url) URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error('Failed to revoke object URL:', e);
+    }
+}
+
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -21,7 +202,6 @@ controls.update();
 const gridHelper = new THREE.GridHelper(30, 30, 0x333333, 0x1a1a1a);
 gridHelper.position.y = -4.75;
 gridHelper.visible = true;
-
 gridHelper.material.transparent = true;
 gridHelper.material.opacity = 1.0;
 
@@ -29,38 +209,24 @@ const fadeShader = (shader) => {
     shader.uniforms.fadeDistance = { value: 15.0 };
     shader.vertexShader = shader.vertexShader.replace(
         '#include <common>',
-        `
-        #include <common>
-        varying vec3 vWorldPosition;
-        `
+        `#include <common>\nvarying vec3 vWorldPosition;`
     );
     shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
-        `
-        #include <begin_vertex>
-        vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
-        `
+        `#include <begin_vertex>\nvWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;`
     );
     shader.fragmentShader = shader.fragmentShader.replace(
         '#include <common>',
-        `
-        #include <common>
-        varying vec3 vWorldPosition;
-        uniform float fadeDistance;
-        `
+        `#include <common>\nvarying vec3 vWorldPosition;\nuniform float fadeDistance;`
     );
     shader.fragmentShader = shader.fragmentShader.replace(
         '#include <color_fragment>',
-        `
-        #include <color_fragment>
-        float distFromCenter = length(vWorldPosition.xz);
-        float fadeFactor = 1.0 - smoothstep(8.0, fadeDistance, distFromCenter);
-        diffuseColor.a *= fadeFactor;
-        `
+        `#include <color_fragment>\nfloat distFromCenter = length(vWorldPosition.xz);\nfloat fadeFactor = 1.0 - smoothstep(8.0, fadeDistance, distFromCenter);\ndiffuseColor.a *= fadeFactor;`
     );
 };
 
 gridHelper.material.onBeforeCompile = fadeShader;
+gridHelper.material.userData.allowedShader = true;
 
 scene.add(gridHelper);
 
@@ -132,6 +298,7 @@ class SkinOverlayMaterial extends THREE.MeshStandardMaterial {
         const { skinColor, ...standardParams } = params;
         super(standardParams);
         this.skinColor = skinColor || new THREE.Color(0xcccccc);
+        this.userData.allowedShader = true;
     }
 
     onBeforeCompile(shader) {
@@ -176,9 +343,10 @@ function createMaterial(color, texture) {
 }
 
 function updateStatus(message, type = 'info') {
-    const status = document.getElementById('status');
+    const status = document.getElementById('ugcStatus');
     if (!status) return;
-    status.textContent = message;
+    
+    status.textContent = String(message);
     status.className = 'status-text';
     if (type === 'success') status.classList.add('success');
     if (type === 'error') status.classList.add('error');
@@ -188,19 +356,17 @@ function updateStatus(message, type = 'info') {
 function loadModelFromPath(path) {
     updateStatus('Loading model...', 'loading');
     
-    // Store UGC accessories before removing old model
     const savedUgc = [];
     if (polyModel) {
         equippedUgc.forEach(ugc => {
             if (ugc && ugc.parent) {
-                // Save UGC data including position, rotation, scale
                 savedUgc.push({
-                    object: ugc.clone(), // Clone the UGC object
+                    object: ugc.clone(),
                     parentName: ugc.parent.name,
                     position: ugc.position.clone(),
                     rotation: ugc.rotation.clone(),
                     scale: ugc.scale.clone(),
-                    fileName: ugc.userData.fileName
+                    fileName: ugc.userData.fileName || 'Accessory'
                 });
             }
         });
@@ -230,8 +396,7 @@ function loadModelFromPath(path) {
         
         scene.add(polyModel);
         
-        // Re-attach saved UGC accessories to new model
-        equippedUgc = []; // Clear the old array
+        equippedUgc = [];
         savedUgc.forEach(ugcData => {
             let attached = false;
             polyModel.traverse(child => {
@@ -247,25 +412,19 @@ function loadModelFromPath(path) {
             });
         });
         
-        // Reapply all active textures
-        if (faceTexture) {
-            applyFaceTexture();
-        }
+        if (faceTexture) applyFaceTexture();
         
-        // Reapply shirt, pants, and face textures
         for (const category in activeTextures) {
             if (activeTextures[category]) {
                 applyTextureToCategory(category, activeTextures[category]);
             }
         }
         
-        // Update the UGC list UI
         updateUgcList();
-        
         updateStatus('Model loaded', 'success');
     }, undefined, (error) => {
-        updateStatus('Failed to auto-load', 'error');
-        console.error('Auto-load error:', error);
+        updateStatus('Failed to load model', 'error');
+        console.error('Model load error:', error);
     });
 }
 
@@ -278,7 +437,7 @@ function loadFaceDecal(path) {
         faceTexture = texture;
         applyFaceTexture();
     }, undefined, (error) => {
-        console.warn('Could not load smile.png:', error);
+        console.warn('Could not load face decal:', error);
     });
 }
 
@@ -312,34 +471,24 @@ function applyTextureToCategory(category, texture) {
     });
 }
 
-function applyClothingTexture(texture) {
-    if (!polyModel) return;
-
-    polyModel.traverse((child) => {
-        if (child.isMesh && !child.userData.isUGC) {
-            child.material = createMaterial(currentSkinTone, texture);
-        }
-    });
-}
-
 function refreshModelTextures(keepExisting, currentCategory) {
     if (!polyModel) return;
     
     polyModel.traverse(child => {
         if (child.isMesh) {
-            if (child.userData.isUGC) return; 
+            if (child.userData.isUGC) return;
 
             const meshName = child.name.toLowerCase();
             let appliedTexture = null;
 
-            const isCurrentTarget = BODY_PARTS[currentCategory].some(part => meshName.includes(part));
+            const isCurrentTarget = BODY_PARTS[currentCategory]?.some(part => meshName.includes(part));
             
             if (isCurrentTarget) {
                 appliedTexture = activeTextures[currentCategory];
             } 
             else if (keepExisting) {
                 for (const category in activeTextures) {
-                    if (BODY_PARTS[category].some(part => meshName.includes(part))) {
+                    if (BODY_PARTS[category]?.some(part => meshName.includes(part))) {
                         appliedTexture = activeTextures[category];
                         break;
                     }
@@ -356,208 +505,296 @@ function refreshModelTextures(keepExisting, currentCategory) {
     });
 }
 
-function renderUgcList() {
-    const listContainer = document.getElementById('ugcList');
-    listContainer.innerHTML = equippedUgc.map((item, index) => {
-        const isVisible = item.visible !== false;
-        const eyeIcon = isVisible ? '👁️' : '🙈'; 
-
-        return `
-            <div class="checkbox-option" style="justify-content: space-between; margin-bottom: 5px; border-radius: 30px; display: flex; align-items: center; padding: 5px 15px; background: rgba(255,255,255,0.05);">
-                <span style="font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px;">
-                    ${item.userData.fileName || 'Accessory ' + (index + 1)}
-                </span>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <span onclick="toggleSingleUgc(${index})" style="cursor: pointer; font-size: 14px;" title="Toggle Visibility">
-                        ${eyeIcon}
-                    </span>
-                    <span onclick="removeUgc(${index})" style="color: #ef4444; cursor: pointer; font-weight: bold; font-size: 14px;" title="Remove">
-                        ✕
-                    </span>
-                </div>
-            </div>
-        `;
-    }).join('');
+function updateUgcList() {
+    renderUgcList();
 }
 
-window.removeUgc = function(index) {
+function renderUgcList() {
+    const listContainer = document.getElementById('ugcList');
+    if (!listContainer) return;
+    
+    listContainer.innerHTML = '';
+    
+    // build elements manually instead of innerHTML to avoid xss
+    equippedUgc.forEach((item, index) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'checkbox-option';
+        wrapper.style.cssText = 'justify-content: space-between; margin-bottom: 5px; border-radius: 30px; display: flex; align-items: center; padding: 5px 15px; background: rgba(255,255,255,0.05);';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px;';
+        nameSpan.textContent = sanitizeFilename(item.userData.fileName || `Accessory ${index + 1}`);
+        
+        const controlsDiv = document.createElement('div');
+        controlsDiv.style.cssText = 'display: flex; gap: 10px; align-items: center;';
+        
+        const isVisible = item.visible !== false;
+        const toggleSpan = document.createElement('span');
+        toggleSpan.style.cssText = 'cursor: pointer; font-size: 14px;';
+        toggleSpan.textContent = isVisible ? '👁️' : '🙈';
+        toggleSpan.title = 'Toggle Visibility';
+        toggleSpan.addEventListener('click', () => toggleSingleUgc(index));
+        
+        const removeSpan = document.createElement('span');
+        removeSpan.style.cssText = 'color: #ef4444; cursor: pointer; font-weight: bold; font-size: 14px;';
+        removeSpan.textContent = '✕';
+        removeSpan.title = 'Remove';
+        removeSpan.addEventListener('click', () => removeUgc(index));
+        
+        controlsDiv.appendChild(toggleSpan);
+        controlsDiv.appendChild(removeSpan);
+        
+        wrapper.appendChild(nameSpan);
+        wrapper.appendChild(controlsDiv);
+        listContainer.appendChild(wrapper);
+    });
+}
+
+function removeUgc(index) {
     const item = equippedUgc[index];
     if (item && polyModel) {
         polyModel.remove(item);
         equippedUgc.splice(index, 1);
         renderUgcList();
     }
-};
+}
 
-window.toggleSingleUgc = function(index) {
+function toggleSingleUgc(index) {
     const item = equippedUgc[index];
     if (item) {
         item.visible = !item.visible;
         renderUgcList();
-        const status = item.visible ? "shown" : "hidden";
-        console.log(`${item.userData.fileName} is now ${status}`);
     }
-};
+}
 
 async function loadUgc(file) {
-    if (equippedUgc.length >= 9) return alert("Max 9 accessories!");
-    if (!polyModel) return alert("Load character first!");
-
-    updateStatus(`Loading ${file.name}...`, 'loading');
-
-    const reader = new FileReader();
-    
-    reader.onload = function(event) {
-        const contents = event.target.result;
-        const loader = new THREE.GLTFLoader();
-
-        loader.parse(contents, '', (gltf) => {
-            const accessory = gltf.scene;
-            
-            accessory.traverse(child => {
-                if (child.isMesh) {
-                    child.userData.isUGC = true;
-                    child.castShadow = true;
-                }
-            });
-
-            accessory.userData.fileName = file.name;
-            polyModel.add(accessory);
-            equippedUgc.push(accessory);
-
-            renderUgcList();
-            updateStatus("Accessory added!", "success");
-        }, (err) => {
-            updateStatus("Failed to parse GLB data", "error");
-            console.error(err);
-        });
-    };
-
-    reader.readAsArrayBuffer(file);
-}
-
-function applyCanvasAsTexture(canvas) {
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.flipY = false;
-    texture.encoding = THREE.sRGBEncoding;
-    
-    polyModel.traverse(child => {
-        if (child.isMesh && !child.userData.isUGC) {
-            const meshName = child.name.toLowerCase();
-            const isTarget = BODY_PARTS.shirt.some(part => meshName.includes(part));
-            
-            if (isTarget) {
-                child.material = createMaterial(currentSkinTone, texture);
-            } else {
-                const isFace = meshName.includes('head') || meshName.includes('face');
-                child.material = createMaterial(currentSkinTone, isFace ? faceTexture : null);
-            }
-            child.material.needsUpdate = true;
-        }
-    });
-}
-
-async function downloadTexturesZip() {
-    if (!polyModel) return alert("Please load a character first!");
-    updateStatus("Preparing ZIP Archive...", "loading");
-
-    if (typeof JSZip === 'undefined') {
-        const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
-        document.head.appendChild(script);
-        await new Promise(resolve => script.onload = resolve);
+    if (equippedUgc.length >= 9) {
+        updateStatus("Maximum 9 accessories reached!", "error");
+        return;
     }
-
-    const zip = new JSZip();
-    const textureFolder = zip.folder("textures");
-    let textureCount = 0;
-
-    polyModel.traverse((child) => {
-        if (child.isMesh && child.material) {
-            const materials = Array.isArray(child.material) ? child.material : [child.material];
-            
-            materials.forEach((mat, index) => {
-                if (mat.map && mat.map.image) {
-                    try {
-                        const canvas = document.createElement('canvas');
-                        const img = mat.map.image;
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-
-                        const dataUrl = canvas.toDataURL("image/png");
-                        const base64Data = dataUrl.replace(/^data:image\/(png|jpg);base64,/, "");
-
-                        const fileName = `${child.name || 'accessory'}_${textureCount}.png`;
-                        textureFolder.file(fileName, base64Data, {base64: true});
-                        textureCount++;
-                    } catch (e) {
-                        console.warn(`Could not extract texture from ${child.name}:`, e);
-                    }
-                }
-            });
-        }
-    });
-
-    if (textureCount === 0) {
-        updateStatus("No textures found to ZIP.", "error");
+    if (!polyModel) {
+        updateStatus("Please load a character model first!", "error");
         return;
     }
 
-    const content = await zip.generateAsync({type: "blob"});
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(content);
-    link.download = "character_textures.zip";
-    link.click();
+    try {
+        await validateGLBFile(file);
+        
+        updateStatus(`Loading ${sanitizeFilename(file.name)}...`, 'loading');
+
+        const reader = new FileReader();
+        
+        await new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                reject(new Error('GLB load timeout'));
+            }, FILE_LOAD_TIMEOUT);
+            
+            reader.onload = function(event) {
+                clearTimeout(timeoutId);
+                const contents = event.target.result;
+                const loader = new THREE.GLTFLoader();
+
+                loader.parse(contents, '', (gltf) => {
+                    try {
+                        validateGLTFModel(gltf);
+                        
+                        const accessory = gltf.scene;
+                        
+                        accessory.traverse(child => {
+                            if (child.isMesh) {
+                                child.userData.isUGC = true;
+                                child.castShadow = true;
+                                
+                                // remove any custom shaders that weren't marked safe
+                                if (child.material && child.material.onBeforeCompile) {
+                                    if (!child.material.userData.allowedShader) {
+                                        delete child.material.onBeforeCompile;
+                                    }
+                                }
+                            }
+                        });
+
+                        accessory.userData.fileName = sanitizeFilename(file.name);
+                        polyModel.add(accessory);
+                        equippedUgc.push(accessory);
+
+                        renderUgcList();
+                        updateStatus("Accessory added!", "success");
+                        resolve();
+                    } catch (err) {
+                        updateStatus(err.message, "error");
+                        reject(err);
+                    }
+                }, (err) => {
+                    clearTimeout(timeoutId);
+                    updateStatus("Failed to parse GLB file", "error");
+                    reject(err);
+                });
+            };
+            
+            reader.onerror = () => {
+                clearTimeout(timeoutId);
+                reject(new Error('File read error'));
+            };
+
+            reader.readAsArrayBuffer(file);
+        });
+    } catch (error) {
+        updateStatus(error.message, "error");
+        console.error('UGC load error:', error);
+    }
+}
+
+async function downloadTexturesZip() {
+    if (!polyModel) {
+        updateStatus("Please load a character first!", "error");
+        return;
+    }
     
-    updateStatus(`ZIP Downloaded! (${textureCount} files)`, "success");
+    updateStatus("Preparing ZIP Archive...", "loading");
+
+    try {
+        if (typeof JSZip === 'undefined') {
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+            script.integrity = 'sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG';
+            script.crossOrigin = 'anonymous';
+            document.head.appendChild(script);
+            await new Promise((resolve, reject) => {
+                script.onload = resolve;
+                script.onerror = () => reject(new Error('Failed to load JSZip'));
+            });
+        }
+
+        const zip = new JSZip();
+        const textureFolder = zip.folder("textures");
+        let textureCount = 0;
+
+        polyModel.traverse((child) => {
+            if (child.isMesh && child.material) {
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+                
+                materials.forEach((mat) => {
+                    if (mat.map && mat.map.image) {
+                        try {
+                            const canvas = document.createElement('canvas');
+                            const img = mat.map.image;
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0);
+
+                            const dataUrl = canvas.toDataURL("image/png");
+                            const base64Data = dataUrl.replace(/^data:image\/(png|jpg);base64,/, "");
+
+                            const safeName = sanitizeFilename(child.name || 'accessory');
+                            const fileName = `${safeName}_${textureCount}.png`;
+                            textureFolder.file(fileName, base64Data, {base64: true});
+                            textureCount++;
+                        } catch (e) {
+                            console.warn(`Could not extract texture:`, e);
+                        }
+                    }
+                });
+            }
+        });
+
+        if (textureCount === 0) {
+            updateStatus("No textures found to export", "error");
+            return;
+        }
+
+        const content = await zip.generateAsync({type: "blob"});
+        const url = safeCreateObjectURL(content);
+        
+        if (!url) {
+            updateStatus("Failed to create download", "error");
+            return;
+        }
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = "character_textures.zip";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        setTimeout(() => safeRevokeObjectURL(url), 100);
+        
+        updateStatus(`ZIP Downloaded! (${textureCount} textures)`, "success");
+    } catch (error) {
+        updateStatus("ZIP export failed", "error");
+        console.error('ZIP error:', error);
+    }
 }
 
 async function downloadGeometry() {
-    if (!polyModel) return alert("Please load a character first!");
-    updateStatus("Baking Geometry (No Textures)...", "loading");
-
-    const exporter = new THREE.GLTFExporter();
-    const exportScene = new THREE.Scene();
-    const cleanModel = polyModel.clone();
+    if (!polyModel) {
+        updateStatus("Please load a character first!", "error");
+        return;
+    }
     
-    cleanModel.traverse((child) => {
-        if (child.isMesh) {
-            child.material = new THREE.MeshStandardMaterial({
-                color: 0xffffff,
-                roughness: 0.8,
-                metalness: 0.1
-            });
-            child.material.map = null;
-            child.material.emissiveMap = null;
-            child.material.normalMap = null;
-        }
-    });
+    updateStatus("Exporting geometry...", "loading");
 
-    exportScene.add(cleanModel);
+    try {
+        const exporter = new THREE.GLTFExporter();
+        const exportScene = new THREE.Scene();
+        const cleanModel = polyModel.clone();
+        
+        cleanModel.traverse((child) => {
+            if (child.isMesh) {
+                child.material = new THREE.MeshStandardMaterial({
+                    color: 0xffffff,
+                    roughness: 0.8,
+                    metalness: 0.1
+                });
+                child.material.map = null;
+                child.material.emissiveMap = null;
+                child.material.normalMap = null;
+            }
+        });
 
-    exporter.parse(
-        exportScene,
-        (result) => {
-            const blob = new Blob([result], { type: 'application/octet-stream' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = "character_geometry.glb";
-            link.click();
-            updateStatus("Geometry Downloaded!", "success");
-        },
-        (err) => {
-            console.error("Geometry Export Failed:", err);
-            updateStatus("Geometry Export Failed", "error");
-        },
-        { binary: true }
-    );
+        exportScene.add(cleanModel);
+
+        exporter.parse(
+            exportScene,
+            (result) => {
+                const blob = new Blob([result], { type: 'application/octet-stream' });
+                const url = safeCreateObjectURL(blob);
+                
+                if (!url) {
+                    updateStatus("Failed to create download", "error");
+                    return;
+                }
+                
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = "character_geometry.glb";
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                setTimeout(() => safeRevokeObjectURL(url), 100);
+                
+                updateStatus("Geometry downloaded!", "success");
+            },
+            (err) => {
+                console.error("Export error:", err);
+                updateStatus("Export failed", "error");
+            },
+            { binary: true }
+        );
+    } catch (error) {
+        updateStatus("Export failed", "error");
+        console.error('Export error:', error);
+    }
 }
 
 const bgInput = document.getElementById('bgColor');
 if (bgInput) {
-    bgInput.addEventListener('input', e => renderer.setClearColor(e.target.value));
+    bgInput.addEventListener('input', e => {
+        renderer.setClearColor(e.target.value);
+    });
 }
 
 const skinInput = document.getElementById('skinTone');
@@ -566,7 +803,7 @@ if (skinInput) {
         currentSkinTone = new THREE.Color(e.target.value);
         if (!polyModel) return;
         polyModel.traverse(child => {
-            if (child.isMesh && !child.userData.isUGC) { 
+            if (child.isMesh && !child.userData.isUGC) {
                 if (child.material.skinColor) {
                     child.material.skinColor.copy(currentSkinTone);
                 } else {
@@ -587,31 +824,41 @@ if (gridInput) {
 
 const uploadInput = document.getElementById('upload');
 if (uploadInput) {
-    uploadInput.addEventListener('change', function(e) {
+    uploadInput.addEventListener('change', async function(e) {
         if (!polyModel) {
-            alert('Please load a character model first!');
+            updateStatus('Please load a character model first!', 'error');
+            this.value = '';
             return;
         }
+        
         const file = e.target.files[0];
         if (!file) return;
         
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const textureLoader = new THREE.TextureLoader();
-            textureLoader.load(event.target.result, (texture) => {
-                texture.flipY = false;
-                texture.encoding = THREE.sRGBEncoding;
-                
-                const clothingType = document.getElementById('clothingType').value;
-                const keepExisting = document.getElementById('keepTextures')?.checked ?? true;
+        try {
+            await validateImageFile(file);
+            
+            const img = await loadImageSafely(file);
+            
+            const texture = new THREE.Texture(img);
+            texture.flipY = false;
+            texture.encoding = THREE.sRGBEncoding;
+            texture.needsUpdate = true;
+            
+            const clothingType = document.getElementById('clothingType')?.value || 'shirt';
+            const keepExisting = document.getElementById('keepTextures')?.checked ?? true;
 
-                activeTextures[clothingType] = texture;
-                if (clothingType === 'face') faceTexture = texture;
-                
-                refreshModelTextures(keepExisting, clothingType);
-            });
-        };
-        reader.readAsDataURL(file);
+            activeTextures[clothingType] = texture;
+            if (clothingType === 'face') faceTexture = texture;
+            
+            refreshModelTextures(keepExisting, clothingType);
+            
+            safeRevokeObjectURL(img.src);
+            
+            updateStatus('Texture applied successfully!', 'success');
+        } catch (error) {
+            updateStatus(error.message, 'error');
+            this.value = '';
+        }
     });
 }
 
@@ -621,7 +868,7 @@ if (clearBtn) {
         if (!polyModel) return;
         
         activeTextures = { shirt: null, pants: null, face: null };
-        faceTexture = null; 
+        faceTexture = null;
         
         polyModel.traverse(child => {
             if (child.isMesh) {
@@ -632,61 +879,49 @@ if (clearBtn) {
         
         const upload = document.getElementById('upload');
         if (upload) upload.value = '';
+        
+        updateStatus('Textures cleared', 'info');
     });
 }
 
 const ugcUpload = document.getElementById('ugcUpload');
 if (ugcUpload) {
-    ugcUpload.addEventListener('change', function(e) {
-        if (!polyModel) {
-            alert('Please load a character model first!');
-            this.value = '';
-            return;
-        }
-
+    ugcUpload.addEventListener('change', async function(e) {
         const file = e.target.files[0];
+        this.value = '';
+        
         if (!file) return;
-
-        if (equippedUgc.length >= 9) {
-            alert('Maximum 9 accessories reached!');
-            this.value = '';
+        
+        if (!polyModel) {
+            updateStatus('Please load a character model first!', 'error');
             return;
         }
 
-        const reader = new FileReader();
-        reader.onload = function(event) {
-            const contents = event.target.result;
-            const loader = new THREE.GLTFLoader();
-
-            loader.parse(contents, '', (gltf) => {
-                const accessory = gltf.scene;
-                accessory.userData.fileName = file.name;
-                
-                accessory.traverse(child => {
-                    if (child.isMesh) {
-                        child.userData.isUGC = true; 
-                    }
-                });
-            
-                polyModel.add(accessory);
-                equippedUgc.push(accessory);
-                renderUgcList();
-            });
-        };
-        
-        reader.readAsArrayBuffer(file);
-        this.value = ''; 
+        await loadUgc(file);
     });
 }
 
 const clearUgcBtn = document.getElementById('clearUgcBtn');
 if (clearUgcBtn) {
     clearUgcBtn.addEventListener('click', () => {
-        equippedUgc.forEach(item => polyModel.remove(item));
+        if (!polyModel) return;
+        equippedUgc.forEach(item => {
+            if (item) polyModel.remove(item);
+        });
         equippedUgc = [];
         renderUgcList();
-        updateStatus("All UGC cleared", "info");
+        updateStatus("All accessories cleared", "info");
     });
+}
+
+const downloadGeometryBtn = document.getElementById('downloadGeometryBtn');
+if (downloadGeometryBtn) {
+    downloadGeometryBtn.addEventListener('click', downloadGeometry);
+}
+
+const downloadTexturesBtn = document.getElementById('downloadTexturesBtn');
+if (downloadTexturesBtn) {
+    downloadTexturesBtn.addEventListener('click', downloadTexturesZip);
 }
 
 const convertBtn = document.getElementById('convertBtn');
@@ -694,37 +929,29 @@ if (convertBtn) {
     convertBtn.addEventListener('click', async () => {
         const fileInput = document.getElementById('converterInput');
         const file = fileInput?.files[0];
-        if (!file) { 
-            alert('Please select a template image first!'); 
-            return; 
+        
+        if (!file) {
+            updateStatus('Please select a template image first!', 'error');
+            return;
         }
         
-        const mode = document.querySelector('input[name="convertMode"]:checked')?.value || 'rbx2poly';
-        const isRbx2Poly = mode === 'rbx2poly';
-        const srcMap = isRbx2Poly ? rbxMapData : polyMapData;
-        const destMap = isRbx2Poly ? polyMapData : rbxMapData;
-        
-        updateStatus('Converting...', 'loading');
-        
         try {
-            const img = new Image();
-            const reader = new FileReader();
+            await validateImageFile(file);
             
-            await new Promise((resolve, reject) => {
-                reader.onload = (e) => {
-                    img.onload = resolve;
-                    img.onerror = reject;
-                    img.src = e.target.result;
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-            });
+            const mode = document.querySelector('input[name="convertMode"]:checked')?.value || 'rbx2poly';
+            const isRbx2Poly = mode === 'rbx2poly';
+            const srcMap = isRbx2Poly ? rbxMapData : polyMapData;
+            const destMap = isRbx2Poly ? polyMapData : rbxMapData;
+            
+            updateStatus('Converting...', 'loading');
+            
+            const img = await loadImageSafely(file);
             
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d', { 
                 willReadFrequently: true,
                 alpha: true 
-            });
+            }); 
             
             canvas.width = isRbx2Poly ? 1024 : 585;
             canvas.height = isRbx2Poly ? 1024 : 559;
@@ -742,13 +969,20 @@ if (convertBtn) {
                 });
             });
             
+            safeRevokeObjectURL(img.src);
+            
             canvas.toBlob((blob) => {
                 if (!blob) {
                     updateStatus('Conversion failed', 'error');
                     return;
                 }
                 
-                const url = URL.createObjectURL(blob);
+                const url = safeCreateObjectURL(blob);
+                if (!url) {
+                    updateStatus('Failed to create download', 'error');
+                    return;
+                }
+                
                 const link = document.createElement('a');
                 link.download = isRbx2Poly ? 'polytoria_template.png' : 'roblox_template.png';
                 link.href = url;
@@ -757,39 +991,25 @@ if (convertBtn) {
                 link.click();
                 document.body.removeChild(link);
                 
-                setTimeout(() => URL.revokeObjectURL(url), 100);
+                setTimeout(() => safeRevokeObjectURL(url), 100);
                 
                 updateStatus('Conversion complete!', 'success');
-                
-                if (document.getElementById('clothingType')?.value === 'shirt' && polyModel) {
-                    applyCanvasAsTexture(canvas);
-                }
             }, 'image/png', 1.0);
-        } catch (err) { 
-            console.error('Conversion error:', err);
-            updateStatus('Conversion failed - try a different image', 'error');
-        }
-    });
-}
-
-const addUgcBtn = document.getElementById('addUgcBtn');
-if (addUgcBtn) {
-    addUgcBtn.addEventListener('click', () => {
-        const idInput = document.getElementById('ugcId');
-        const id = idInput.value.trim();
-        if (id) {
-            loadUgc(id);
-            idInput.value = '';
+        } catch (error) {
+            updateStatus(error.message, 'error');
+            console.error('Conversion error:', error);
         }
     });
 }
 
 window.addEventListener('load', () => {
     const bg = document.getElementById('bgColor');
-    if (bg) renderer.setClearColor(bg.value);
+    if (bg) {
+        renderer.setClearColor(bg.value);
+    }
     
-    loadModelFromPath('character.glb');
-    setTimeout(() => loadFaceDecal('Smile.png'), 1000);
+    loadModelFromPath('assets/rigs/character.glb');
+    setTimeout(() => loadFaceDecal('assets/face/Smile.png'), 1000);
     
     const mobileToggle = document.getElementById('mobile-toggle');
     const controlsPanel = document.getElementById('controls-panel');
@@ -829,7 +1049,7 @@ window.addEventListener('load', () => {
             isDragging = false;
         }, { passive: true });
         
-        mobileToggle.addEventListener('click', (e) => {
+        mobileToggle.addEventListener('click', () => {
             if (window.innerWidth > 768) {
                 controlsPanel.classList.toggle('open');
             }
@@ -837,15 +1057,60 @@ window.addEventListener('load', () => {
     }
     
     setupDropZone('converterDropZone', 'converterInput', ['image/png', 'image/jpeg', 'image/jpg']);
+    setupDropZone('clothingDropZone',  'upload',         ['image/png', 'image/jpeg', 'image/jpg']);
     setupDropZone('ugcDropZone', 'ugcUpload', ['model/gltf-binary', '.glb']);
     
-    const genderRadios = document.querySelectorAll('input[name="characterGender"]');
-    genderRadios.forEach(radio => {
-        radio.addEventListener('change', (e) => {
-            const modelPath = e.target.value === 'female' ? 'character_female.glb' : 'character.glb';
-            loadModelFromPath(modelPath);
-        });
+    function getModelPath() {
+        const gender = document.querySelector('input[name="characterGender"]:checked')?.value ?? 'male';
+        const rig    = document.querySelector('input[name="rigType"]:checked')?.value ?? 'new';
+        if (rig === 'legacy') {
+            return gender === 'female'
+                ? 'assets/legacy_rigs/old_character_female.glb'
+                : 'assets/legacy_rigs/old_character.glb';
+        }
+        return gender === 'female'
+            ? 'assets/rigs/character_female.glb'
+            : 'assets/rigs/character.glb';
+    }
+
+    document.querySelectorAll('input[name="characterGender"]').forEach(radio => {
+        radio.addEventListener('change', () => loadModelFromPath(getModelPath()));
     });
+
+    document.querySelectorAll('input[name="rigType"]').forEach(radio => {
+        radio.addEventListener('change', () => loadModelFromPath(getModelPath()));
+    });
+
+    // Initialize color pickers
+    function initColorPickers() {
+        [
+            { inputId: 'bgColor',  dotId: 'bgColorDot',  hexId: 'bgColorHex',  fieldId: 'bgColorField'  },
+            { inputId: 'skinTone', dotId: 'skinToneDot', hexId: 'skinToneHex', fieldId: 'skinToneField' }
+        ].forEach(({ inputId, dotId, hexId, fieldId }) => {
+            const input = document.getElementById(inputId);
+            const dot   = document.getElementById(dotId);
+            const hex   = document.getElementById(hexId);
+            const field = document.getElementById(fieldId);
+            if (!input || !dot || !hex || !field) return;
+
+            function sync() {
+                const c = input.value;
+                const r = parseInt(c.slice(1, 3), 16);
+                const g = parseInt(c.slice(3, 5), 16);
+                const b = parseInt(c.slice(5, 7), 16);
+                field.style.background  = `rgba(${r},${g},${b},0.18)`;
+                field.style.borderColor = `rgba(${r},${g},${b},0.35)`;
+                dot.style.background    = c;
+                hex.style.color         = c;
+                hex.textContent         = c.toUpperCase();
+            }
+
+            input.addEventListener('input', sync);
+            sync();
+        });
+    }
+
+    initColorPickers();
 });
 
 function setupDropZone(dropZoneId, inputId, acceptedTypes) {
@@ -855,7 +1120,7 @@ function setupDropZone(dropZoneId, inputId, acceptedTypes) {
     if (!dropZone || !input) return;
     
     const textElement = dropZone.querySelector('.drop-zone-text');
-    const originalText = textElement.textContent;
+    const originalText = textElement ? textElement.textContent : '';
     
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         dropZone.addEventListener(eventName, preventDefaults, false);
@@ -894,12 +1159,14 @@ function setupDropZone(dropZoneId, inputId, acceptedTypes) {
                 dataTransfer.items.add(file);
                 input.files = dataTransfer.files;
                 
-                updateDropZoneText(dropZone, textElement, file.name);
+                if (textElement) {
+                    updateDropZoneText(dropZone, textElement, sanitizeFilename(file.name));
+                }
                 
                 const event = new Event('change', { bubbles: true });
                 input.dispatchEvent(event);
             } else {
-                alert('Invalid file type. Please upload the correct format.');
+                updateStatus('Invalid file type. Please upload the correct format.', 'error');
             }
         }
     });
@@ -910,9 +1177,11 @@ function setupDropZone(dropZoneId, inputId, acceptedTypes) {
         }
     });
     
-    input.addEventListener('change', (e) => {
+    input.addEventListener('change', () => {
+        if (!textElement) return;
+        
         if (input.files.length > 0) {
-            updateDropZoneText(dropZone, textElement, input.files[0].name);
+            updateDropZoneText(dropZone, textElement, sanitizeFilename(input.files[0].name));
         } else {
             resetDropZoneText(dropZone, textElement, originalText);
         }
@@ -930,7 +1199,6 @@ function setupDropZone(dropZoneId, inputId, acceptedTypes) {
         text.textContent = original;
     }
 }
-
 
 function animate() {
     requestAnimationFrame(animate);
