@@ -79,15 +79,23 @@ npx http-server
 
 ```
 polytoria-avatar-toolkit/
-├── index.html          # Main HTML file
-├── style.css           # Styling
-├── script.js           # Core functionality
-├── character.glb       # Default character model
-├── character.glb       # Female character model
-├── smile.png           # Default face decal
-├── preview.png         # Preview for README
-├── LICENSE             # License
-└── README.md           # Documentation
+├── index.html                      # Main HTML file
+├── style.css                       # Styling
+├── script.js                       # Core functionality
+├── assets/
+│   ├── rigs/
+│   │   ├── character.glb           # Default character model
+│   │   └── character_female.glb    # Female character model
+│   ├── legacy_rigs/
+│   │   ├── old_character.glb       # Legacy male rig
+│   │   └── old_character_female.glb# Legacy female rig
+│   ├── face/
+│   │   └── Smile.png               # Default face decal
+│   └── svg/
+│       ├── accessory.svg           # Accessory icon
+│       ├── clothing.svg            # Clothing icon
+│       └── folder.svg              # Folder icon
+└── README.md                       # Documentation
 ```
 
 
