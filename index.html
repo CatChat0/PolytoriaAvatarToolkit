@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Polytoria Avatar Previewer</title>
     <link rel="stylesheet" href="style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/exporters/GLTFExporter.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js" integrity="sha384-fljlqkjWlmSFjkESkQvm77heIZpoWmXEOzlCA7kOpGUH+95Zk0yGfQieWM2q136E" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" integrity="sha384-wagZhIFgY4hD+7awjQjR4e2E294y6J2HSnd8eTNc15ZubTeQeVRZwhQJ+W6hnBsf" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/exporters/GLTFExporter.js" integrity="sha384-fz8UmA1wT7KrA88we2948dh8iOo318hFy6/Azeb0sQov7fG1qhPIdOpCOwin+Fd7" crossorigin="anonymous"></script>
 </head>
 <body>
     <div id="controls-panel">
@@ -30,7 +30,9 @@
                 </label>
             </div>
             <div class="drop-zone" id="converterDropZone">
-                <div class="drop-zone-icon">📁</div>
+                <div class="drop-zone-icon">
+                    <img src="assets/svg/folder.svg" alt="">
+                </div>
                 <div class="drop-zone-text">Drop template image here or click to browse</div>
                 <input type="file" id="converterInput" accept="image/*">
             </div>
@@ -53,12 +55,33 @@
                 </div>
             </div>
             <div class="input-group">
+                <label>Rig Type</label>
+                <div class="radio-group">
+                    <label class="radio-option">
+                        <input type="radio" name="rigType" value="new" checked>
+                        <span>New Rig</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="rigType" value="legacy">
+                        <span>Legacy Rig</span>
+                    </label>
+                </div>
+            </div>
+            <div class="input-group">
                 <label>Background</label>
-                <input type="color" id="bgColor" value="#0a0a0a">
+                <div class="color-field" id="bgColorField">
+                    <span class="color-dot" id="bgColorDot"></span>
+                    <span class="color-hex" id="bgColorHex">#0A0A0A</span>
+                    <input type="color" id="bgColor" value="#0a0a0a">
+                </div>
             </div>
             <div class="input-group">
                 <label>Skin Tone</label>
-                <input type="color" id="skinTone" value="#cccccc">
+                <div class="color-field" id="skinToneField">
+                    <span class="color-dot" id="skinToneDot"></span>
+                    <span class="color-hex" id="skinToneHex">#CCCCCC</span>
+                    <input type="color" id="skinTone" value="#cccccc">
+                </div>
             </div>
         </section>
 
@@ -84,29 +107,37 @@
                     <span>Layer Textures (Don't Clear)</span>
                 </label>
             </div>
-            <input type="file" id="upload" accept="image/*" class="file-input">
+            <div class="drop-zone" id="clothingDropZone">
+                <div class="drop-zone-icon">
+                    <img src="assets/svg/clothing.svg" alt="">
+                </div>
+                <div class="drop-zone-text">Drop texture image here or click to browse</div>
+                <input type="file" id="upload" accept="image/*">
+            </div>
             <button id="clearBtn" class="btn btn-secondary">Clear Textures</button>
         </section>
 
         <section class="section">
             <h2>UGC Accessories</h2>
             <div class="drop-zone" id="ugcDropZone">
-                <div class="drop-zone-icon">🎭</div>
+                <div class="drop-zone-icon">
+                    <img src="assets/svg/accessory.svg" alt="">
+                </div>
                 <div class="drop-zone-text">Drop .glb accessory here or click to browse</div>
                 <input type="file" id="ugcUpload" accept=".glb">
             </div>
             <p class="status-text" id="ugcStatus"></p>
             <div id="ugcList"></div>
             <button id="clearUgcBtn" class="btn btn-secondary" style="margin-top: 10px;">Clear All Accessories</button>
-            <button id="downloadBtn" class="btn btn-primary" onclick="downloadGeometry()">Download Character</button>
-            <button id="downloadBtn" class="btn btn-secondary" onclick="downloadTexturesZip()">Download Textures</button>
+            <button id="downloadGeometryBtn" class="btn btn-primary">Download Character</button>
+            <button id="downloadTexturesBtn" class="btn btn-secondary">Download Textures</button>
         </section>
     </div>
 
     <div id="canvas-container"></div>
 
     <div class="watermark">
-        Made by <a href="https://github.com/CatChat0" target="_blank">CatChat</a>, consider donating me on <a href="https://polytoria.com/u/C4TCH4T" target="_blank">Polytoria</a>. <3
+        Made by <a href="https://github.com/CatChat0" target="_blank">CatChat</a>, consider donating me on <a href="https://polytoria.com/u/C4TCH4T" target="_blank">Polytoria</a>. &lt;3
     </div>
 
     <script src="script.js"></script>
